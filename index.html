@@ -7,7 +7,6 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    /* Transparent par défaut — OBS voit le fond transparent */
     background: transparent;
     width: 100vw; height: 100vh;
     display: flex;
@@ -17,7 +16,6 @@
     overflow: hidden;
   }
 
-  /* Fond vert uniquement en mode prévisualisation (?preview dans l'URL) */
   body.preview { background: #00b140; }
 
   #subtitle-box { width: 88%; text-align: center; }
@@ -41,103 +39,50 @@
     display: inline;
     animation: popIn 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
   }
-  .word-span.interim { opacity: 0.5; }
 
   @keyframes popIn {
     from { opacity: 0; transform: scale(0.75); }
     to   { opacity: 1; transform: scale(1); }
   }
-
-  /* Badge mode prévisualisation */
-  #preview-badge {
-    display: none;
-    position: fixed;
-    top: 12px; left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.6);
-    color: #fff;
-    font-family: sans-serif;
-    font-size: 12px;
-    padding: 4px 14px;
-    border-radius: 999px;
-  }
-  body.preview #preview-badge { display: block; }
 </style>
 </head>
 <body>
-
-<div id="preview-badge">Mode prévisualisation — fond vert chroma</div>
-
 <div id="subtitle-box">
   <div id="current-line"></div>
 </div>
 
 <script>
   const lineEl = document.getElementById("current-line");
+  const WORDS_PER_LINE = 4;
+  const COLOR_TEXT     = "#ffffff";
+  const COLOR_ACTIVE   = "#FF8C00";   // Orange clair
+  const STROKE         = "6px #000000";
 
-  // Mode prévisualisation si ?preview dans l'URL
   if (window.location.search.includes("preview")) {
     document.body.classList.add("preview");
   }
 
-  // ── Config (depuis localStorage, mise à jour par l'interface) ─────────────
-  let cfg = {
-    fontSize: "64", fontFamily: "'Montserrat','Arial Black',sans-serif",
-    colorText: "#ffffff", colorStroke: "#000000",
-    strokeWidth: "6", colorActive: "#FFE000", wordsPerLine: "4",
-  };
-
-  function applyConfig(c) {
-    Object.assign(cfg, c);
-    lineEl.style.fontSize         = cfg.fontSize + "px";
-    lineEl.style.fontFamily       = cfg.fontFamily;
-    lineEl.style.color            = cfg.colorText;
-    lineEl.style.webkitTextStroke = `${cfg.strokeWidth}px ${cfg.colorStroke}`;
-  }
-
-  // Charge la config sauvegardée
-  try {
-    const saved = localStorage.getItem("obs-subtitles-cfg");
-    if (saved) applyConfig(JSON.parse(saved));
-    else applyConfig(cfg);
-  } catch { applyConfig(cfg); }
-
-  // Écoute les changements de config depuis l'interface (même navigateur)
-  window.addEventListener("storage", (e) => {
-    if (e.key === "obs-subtitles-cfg" && e.newValue) {
-      try { applyConfig(JSON.parse(e.newValue)); } catch {}
-    }
-  });
-
-  // ── WebSocket optionnel (si subtitles.py tourne) ──────────────────────────
-  let ws = null;
-  function connectWS() {
-    ws = new WebSocket("ws://localhost:8765");
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "config") applyConfig(msg);
-      } catch {}
-    };
-    ws.onclose = () => setTimeout(connectWS, 3000);
-  }
-  try { connectWS(); } catch {}
-
-  // ── Affichage ─────────────────────────────────────────────────────────────
   let confirmedWords = [];
   let clearTimer     = null;
+  let lastFinalIndex = -1;   // Pour éviter les doublons
 
   function renderWords(confirmed, interim) {
-    const wordsPerLine = parseInt(cfg.wordsPerLine) || 4;
-    const lineWords    = confirmed.slice(-wordsPerLine);
-    const allWords     = [...lineWords, ...interim];
+    const lineWords = confirmed.slice(-WORDS_PER_LINE);
+    const allWords  = [...lineWords, ...interim];
 
     lineEl.innerHTML = "";
     allWords.forEach((word, i) => {
-      const span       = document.createElement("span");
-      span.className   = "word-span" + (i >= lineWords.length ? " interim" : "");
-      const isActive   = i === lineWords.length - 1 && interim.length === 0;
-      span.style.color = isActive ? cfg.colorActive : cfg.colorText;
+      const span     = document.createElement("span");
+      span.className = "word-span";
+      // Dernier mot confirmé = orange, interim = blanc semi-transparent
+      if (i >= lineWords.length) {
+        span.style.color   = COLOR_TEXT;
+        span.style.opacity = "0.5";
+      } else if (i === lineWords.length - 1) {
+        span.style.color = COLOR_ACTIVE;
+      } else {
+        span.style.color = COLOR_TEXT;
+      }
       span.textContent = (i === 0 ? "" : " ") + word;
       lineEl.appendChild(span);
     });
@@ -147,41 +92,48 @@
       lineEl.style.transition = "opacity 0.6s";
       lineEl.style.opacity    = "0";
       setTimeout(() => {
-        confirmedWords        = [];
-        lineEl.innerHTML      = "";
-        lineEl.style.opacity  = "1";
+        confirmedWords      = [];
+        lastFinalIndex      = -1;
+        lineEl.innerHTML    = "";
+        lineEl.style.opacity    = "1";
         lineEl.style.transition = "";
       }, 600);
     }, 3500);
   }
 
-  // ── Web Speech API ────────────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!SR) {
-    lineEl.style.color    = "red";
-    lineEl.style.fontSize = "20px";
+    lineEl.style.color            = "red";
+    lineEl.style.fontSize         = "20px";
     lineEl.style.webkitTextStroke = "0px";
-    lineEl.textContent    = "Navigateur non supporté — utilise Chrome ou Edge";
+    lineEl.textContent            = "Navigateur non supporté — utilise Chrome";
   } else {
-    const recognition            = new SR();
-    recognition.lang             = "fr-FR";
-    recognition.continuous       = true;
-    recognition.interimResults   = true;
-    recognition.maxAlternatives  = 1;
+    const recognition           = new SR();
+    recognition.lang            = "fr-FR";
+    recognition.continuous      = true;
+    recognition.interimResults  = true;
+    recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
       let interimWords = [];
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         const words  = result[0].transcript.trim().split(/\s+/).filter(Boolean);
+
         if (result.isFinal) {
-          confirmedWords.push(...words);
+          // Évite de traiter deux fois le même résultat final
+          if (i > lastFinalIndex) {
+            lastFinalIndex = i;
+            confirmedWords.push(...words);
+          }
           interimWords = [];
         } else {
           interimWords = words;
         }
       }
+
       renderWords(confirmedWords, interimWords);
     };
 
