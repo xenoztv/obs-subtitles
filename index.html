@@ -52,33 +52,45 @@
 </div>
 
 <script>
-  const lineEl = document.getElementById("current-line");
+  const lineEl         = document.getElementById("current-line");
   const WORDS_PER_LINE = 3;
   const COLOR_TEXT     = "#ffffff";
-  const COLOR_ACTIVE   = "#FF8C00";   // Orange clair
-  const STROKE         = "6px #000000";
+  const COLOR_ACTIVE   = "#FF8C00";
+  const CLEAR_DELAY    = 800;    // ms avant effacement après silence
 
   if (window.location.search.includes("preview")) {
     document.body.classList.add("preview");
   }
 
-  let confirmedWords = [];
+  // ── État ──────────────────────────────────────────────────────────────────
+  let lineWords      = [];    // mots de la ligne courante (max WORDS_PER_LINE)
   let clearTimer     = null;
-  let lastFinalIndex = -1;   // Pour éviter les doublons
+  let lastFinalIndex = -1;
 
-  function renderWords(confirmed, interim) {
-    const lineWords = confirmed.slice(-WORDS_PER_LINE);
-    const allWords  = [...lineWords, ...interim];
+  function clearLine() {
+    lineEl.style.transition = "opacity 0.3s";
+    lineEl.style.opacity    = "0";
+    setTimeout(() => {
+      lineWords           = [];
+      lastFinalIndex      = -1;
+      lineEl.innerHTML    = "";
+      lineEl.style.opacity    = "1";
+      lineEl.style.transition = "";
+    }, 300);
+  }
 
+  function renderLine(words, interimWords) {
+    const all = [...words, ...interimWords];
     lineEl.innerHTML = "";
-    allWords.forEach((word, i) => {
+    all.forEach((word, i) => {
       const span     = document.createElement("span");
       span.className = "word-span";
-      // Dernier mot confirmé = orange, interim = blanc semi-transparent
-      if (i >= lineWords.length) {
+      if (i >= words.length) {
+        // Mot interim : blanc semi-transparent
         span.style.color   = COLOR_TEXT;
         span.style.opacity = "0.5";
-      } else if (i === lineWords.length - 1) {
+      } else if (i === words.length - 1) {
+        // Dernier mot confirmé : orange
         span.style.color = COLOR_ACTIVE;
       } else {
         span.style.color = COLOR_TEXT;
@@ -87,27 +99,19 @@
       lineEl.appendChild(span);
     });
 
+    // Remet le timer d'effacement
     clearTimeout(clearTimer);
-    clearTimer = setTimeout(() => {
-      lineEl.style.transition = "opacity 0.6s";
-      lineEl.style.opacity    = "0";
-      setTimeout(() => {
-        confirmedWords      = [];
-        lastFinalIndex      = -1;
-        lineEl.innerHTML    = "";
-        lineEl.style.opacity    = "1";
-        lineEl.style.transition = "";
-      }, 600);
-    }, 3500);
+    clearTimer = setTimeout(clearLine, CLEAR_DELAY);
   }
 
+  // ── Web Speech API ────────────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!SR) {
     lineEl.style.color            = "red";
     lineEl.style.fontSize         = "20px";
     lineEl.style.webkitTextStroke = "0px";
-    lineEl.textContent            = "Navigateur non supporté — utilise Chrome";
+    lineEl.textContent            = "Utilise Chrome ou Edge";
   } else {
     const recognition           = new SR();
     recognition.lang            = "fr-FR";
@@ -123,18 +127,34 @@
         const words  = result[0].transcript.trim().split(/\s+/).filter(Boolean);
 
         if (result.isFinal) {
-          // Évite de traiter deux fois le même résultat final
-          if (i > lastFinalIndex) {
-            lastFinalIndex = i;
-            confirmedWords.push(...words);
+          if (i <= lastFinalIndex) continue;  // ignore doublons
+          lastFinalIndex = i;
+
+          for (const word of words) {
+            lineWords.push(word);
+            // Quand on atteint la limite → affiche et repart à zéro
+            if (lineWords.length >= WORDS_PER_LINE) {
+              renderLine([...lineWords], []);
+              lineWords = [];
+            }
+          }
+          // Affiche ce qui reste
+          if (lineWords.length > 0) {
+            renderLine([...lineWords], []);
           }
           interimWords = [];
+
         } else {
           interimWords = words;
+          renderLine([...lineWords], interimWords);
         }
       }
+    };
 
-      renderWords(confirmedWords, interimWords);
+    recognition.onspeechend = () => {
+      // Efface rapidement quand le silence est détecté
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(clearLine, CLEAR_DELAY);
     };
 
     recognition.onerror = (e) => {
