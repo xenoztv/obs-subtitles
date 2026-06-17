@@ -42,71 +42,66 @@
   const el  = document.getElementById("line");
   const MAX = 3;
 
-  let buffer     = [];   // mots finaux en attente d'affichage
-  let lastFinal  = -1;
-  let silTimer   = null;
+  let buffer    = [];   // mots finaux accumulés
+  let lastFinal = -1;
+  let silTimer  = null;
 
   function render(words, interim) {
     el.innerHTML = "";
     const all = [...words, ...interim];
     all.forEach((w, i) => {
       const s = document.createElement("span");
-      s.className = "w" + (i >= words.length ? " dim" : i === words.length - 1 ? " active" : "");
+      s.className = "w" +
+        (i >= words.length    ? " dim"    :
+         i === words.length-1 ? " active" : "");
       s.textContent = (i ? " " : "") + w;
       el.appendChild(s);
     });
   }
 
-  function clearAfterSilence() {
+  function scheduleClear() {
+    // Efface seulement après 1.5s de silence total — pas de clignotement
     clearTimeout(silTimer);
     silTimer = setTimeout(() => {
       el.innerHTML = "";
       buffer = [];
-    }, 400);  // efface 400ms après le dernier mot
+    }, 1500);
   }
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { el.textContent = "Utilise Chrome"; return; }
+  if (!SR) { el.textContent = "Utilise Chrome"; }
+  else {
+    const r = new SR();
+    r.lang = "fr-FR";
+    r.continuous = true;
+    r.interimResults = true;
 
-  const r = new SR();
-  r.lang = "fr-FR";
-  r.continuous = true;
-  r.interimResults = true;
+    r.onresult = e => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
 
-  r.onresult = e => {
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
+        if (e.results[i].isFinal) {
+          if (i <= lastFinal) continue;
+          lastFinal = i;
+          clearTimeout(silTimer); // annule l'effacement pendant qu'on parle
 
-      if (e.results[i].isFinal) {
-        if (i <= lastFinal) continue;
-        lastFinal = i;
-
-        for (const w of words) {
-          buffer.push(w);
-          if (buffer.length >= MAX) {
-            // Affiche le groupe de 3 et vide immédiatement
-            render([...buffer], []);
-            buffer = [];
-            clearAfterSilence();
+          for (const w of words) {
+            buffer.push(w);
+            if (buffer.length >= MAX) {
+              // Groupe plein : affiche et repart à zéro SANS passer par le vide
+              render([...buffer], []);
+              buffer = [];
+            }
           }
-        }
-        // Affiche les mots restants (< MAX)
-        if (buffer.length > 0) {
-          render([...buffer], []);
-          clearAfterSilence();
-        }
+          if (buffer.length > 0) render([...buffer], []);
+          scheduleClear(); // démarre le timer de silence
 
-      } else {
-        // Interim : affiche en temps réel par-dessus le buffer courant
-        render([...buffer], words);
-        clearTimeout(silTimer);
+        } else {
+          clearTimeout(silTimer);
+          render([...buffer], words);
+        }
       }
-    }
-  };
+    };
 
-  r.onerror = e => { if (e.error !== "no-speech") setTimeout(() => r.start(), 800); };
-  r.onend   = ()  => setTimeout(() => r.start(), 200);
-  r.start();
-</script>
-</body>
-</html>
+    r.onerror = e => { if (e.error !== "no-speech") setTimeout(() => r.start(), 800); };
+    r.onend   = ()  => setTimeout(() => r.start(), 20
